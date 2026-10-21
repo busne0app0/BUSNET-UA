@@ -337,7 +337,7 @@ export default function PortalLogin({ role, title, subtitle, colorClass, icon: I
             </motion.button>
           </form>
 
-          {role !== 'admin' && (
+          {role !== 'admin' && role !== 'driver' && (
             <div className="mt-6 flex justify-center">
               <button
                 type="button"
@@ -348,6 +348,14 @@ export default function PortalLogin({ role, title, subtitle, colorClass, icon: I
                   ? <span>Немає акаунту? <strong className={colors.textGlow}>Зареєструватись</strong></span>
                   : <span>Вже є акаунт? <strong className={colors.textGlow}>Увійти</strong></span>}
               </button>
+            </div>
+          )}
+          {role === 'driver' && (
+            <div className="mt-6 flex justify-center">
+              <p className="text-sm text-slate-500 text-center">
+                Акаунт водія створює перевізник.<br/>
+                <span className="text-slate-400">Зверніться до вашої транспортної компанії.</span>
+              </p>
             </div>
           )}
 
