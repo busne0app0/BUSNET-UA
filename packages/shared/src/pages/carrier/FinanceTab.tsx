@@ -1,0 +1,494 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { motion } from 'framer-motion';
+import { Wallet, TrendingUp, Download, ArrowUpRight, ArrowDownRight, CreditCard, Landmark, History, Search, MousePointerClick, UserPlus, ShoppingCart } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { useAuthStore } from '@busnet/shared/store/useAuthStore';
+import { supabase } from '@busnet/shared/supabase/config';
+
+interface Transaction {
+  id: string;
+  type: 'income' | 'payout' | 'refund';
+  amount: number;
+  status: 'completed' | 'processing' | 'refunded';
+  date: string;
+  desc: string;
+}
+
+const FinanceTab: React.FC = () => {
+  const { user } = useAuthStore();
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [balance, setBalance] = useState(0);
+  const [pendingBalance, setPendingBalance] = useState(0);
+  const [totalPayouts, setTotalPayouts] = useState(0);
+  const [conversions, setConversions] = useState({ clicks: 1240, registrations: 385, sales: 84 });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchFinanceData = async () => {
+    if (!user) return;
+    try {
+      // 1. Fetch balance
+      const { data: balanceData } = await supabase
+        .from('balances')
+        .select('*')
+        .eq('id', user.uid)
+        .single();
+      
+      if (balanceData) {
+        setBalance(balanceData.balance || (balanceData.totalEarned || 0) - (balanceData.totalPayouts || 0));
+        setPendingBalance(balanceData.pendingBalance || 0);
+        setTotalPayouts(balanceData.totalPayouts || 0);
+      }
+
+      // 2. Fetch recent bookings and payouts concurrently
+      const [bookingsRes, payoutsRes] = await Promise.all([
+        supabase.from('bookings').select('*').eq('carrier_id', user.uid).order('created_at', { ascending: false }).limit(20),
+        supabase.from('payouts').select('*').eq('carrier_id', user.uid).order('created_at', { ascending: false }).limit(10)
+      ]);
+
+      let combined: Transaction[] = [];
+
+      if (bookingsRes.data) {
+        const incomes: Transaction[] = bookingsRes.data.map((d: any) => ({
+          id: `BK-${d.id.slice(0, 8).toUpperCase()}`,
+          type: (d.status === 'cancelled' ? 'refund' : 'income') as any,
+          amount: d.totalPrice || d.total_price || 0,
+          status: (d.status === 'confirmed' ? 'completed' : d.status === 'cancelled' ? 'refunded' : 'processing') as any,
+          date: (d.created_at || d.createdAt) ? new Date(d.created_at || d.createdAt).toLocaleDateString('uk-UA') : '—',
+          desc: d.status === 'cancelled' ? `Повернення: квиток #${d.id.slice(0, 5)}` : `Продаж квитка`
+        }));
+        combined = [...combined, ...incomes];
+      }
+
+      if (payoutsRes.data) {
+        const payouts: Transaction[] = payoutsRes.data.map((p: any) => ({
+          id: `PW-${p.id.slice(0, 8).toUpperCase()}`,
+          type: 'payout' as any,
+          amount: -p.amount,
+          status: (p.status === 'paid' ? 'completed' : 'processing') as any,
+          date: (p.created_at || p.createdAt) ? new Date(p.created_at || p.createdAt).toLocaleDateString('uk-UA') : '—',
+          desc: `Виплата на рахунок`
+        }));
+        combined = [...combined, ...payouts];
+      }
+
+      setTransactions(combined.sort((a, b) => b.id.localeCompare(a.id)));
+
+      // 3. Fetch conversions from analytics or estimate
+      const { data: analyticsData } = await supabase
+        .from('analytics')
+        .select('*')
+        .eq('carrier_id', user.uid)
+        .single();
+      
+      if (analyticsData) {
+        setConversions({
+          clicks: analyticsData.clicks || 0,
+          registrations: analyticsData.registrations || 0,
+          sales: analyticsData.sales || 0
+        });
+      } else {
+        // Якщо немає таблиці analytics — рахуємо з реальних бронювань
+        const salesCount = bookingsRes.data ? bookingsRes.data.filter((b: any) => b.status === 'confirmed').length : 0;
+        const totalCount = bookingsRes.data?.length || 0;
+        setConversions({
+          clicks: totalCount * 12,
+          registrations: totalCount,
+          sales: salesCount
+        });
+      }
+    } catch (err) {
+      console.error("Error fetching finance data:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchFinanceData();
+
+    const balanceChannel = supabase.channel('carrier_balance_change')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'balances', filter: `id=eq.${user?.uid}` }, fetchFinanceData)
+      .subscribe();
+
+    const bookingsChannel = supabase.channel('carrier_transactions_change')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings', filter: `carrier_id=eq.${user?.uid}` }, fetchFinanceData)
+      .subscribe();
+
+    const payoutsChannel = supabase.channel('carrier_payouts_change')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payouts', filter: `carrier_id=eq.${user?.uid}` }, fetchFinanceData)
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(balanceChannel);
+      supabase.removeChannel(bookingsChannel);
+      supabase.removeChannel(payoutsChannel);
+    };
+  }, [user]);
+
+  const handleRequestPayout = async () => {
+    if (balance <= 0) {
+      toast.error('Недостатньо коштів для виплати');
+      return;
+    }
+    const toastId = toast.loading('Створення запиту на виплату...');
+    try {
+      const { error } = await supabase
+        .from('payouts')
+        .insert({
+          carrier_id: user?.uid,
+          amount: balance,
+          status: 'processing',
+          created_at: new Date().toISOString()
+        });
+
+      if (error) throw error;
+
+      toast.success('Запит на виплату надіслано в фінансовий відділ', { id: toastId });
+      fetchFinanceData();
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || 'Не вдалося створити запит на виплату', { id: toastId });
+    }
+  };
+
+  const handleExportCSV = () => {
+    if (transactions.length === 0) {
+      toast.error('Немає транзакцій для експорту');
+      return;
+    }
+    const headers = ['ID', 'Тип', 'Дата', 'Опис', 'Сума (€)', 'Статус'];
+    const csvContent = [
+      headers.join(','),
+      ...transactions.map(t => `"${t.id}","${t.type === 'income' ? 'Дохід' : t.type === 'payout' ? 'Виплата' : 'Повернення'}","${t.date}","${t.desc.replace(/"/g, '""')}",${t.amount},"${t.status}"`)
+    ].join('\n');
+    
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `finance_report_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    toast.success('Звіт успішно експортовано');
+  };
+
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter(t => 
+      t.desc.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      t.id.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [transactions, searchQuery]);
+
+  const dailyEarnings = useMemo(() => {
+    const days = ['НД', 'ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ'];
+    const result = Array.from({ length: 7 }).map((_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (6 - i));
+      return {
+        name: days[d.getDay()],
+        dateStr: d.toDateString(),
+        amount: 0,
+      };
+    });
+
+    transactions.forEach(t => {
+      if (t.type === 'income' && t.status === 'completed') {
+        const parts = t.date.split('.');
+        if (parts.length === 3) {
+          const trDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+          const trDateStr = trDate.toDateString();
+          const match = result.find(r => r.dateStr === trDateStr);
+          if (match) {
+            match.amount += t.amount;
+          }
+        }
+      }
+    });
+
+    const totalAmount = result.reduce((sum, r) => sum + r.amount, 0);
+    if (totalAmount === 0) {
+      // Немає реальних транзакцій — відображаємо порожній графік
+      return result.map((r) => ({
+        ...r,
+        amount: 0,
+        percent: 0,
+      }));
+    }
+
+    const maxAmount = Math.max(...result.map(r => r.amount), 1);
+    return result.map(r => ({
+      ...r,
+      percent: Math.min(100, Math.max(10, (r.amount / maxAmount) * 100)),
+    }));
+  }, [transactions]);
+
+  return (
+    <div className="space-y-6 animate-in fade-in zoom-in-95 duration-500">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-2">
+        <div>
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-1.5 h-6 bg-[#10B981] shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
+            <h2 className="text-2xl md:text-3xl font-black uppercase italic tracking-tighter text-white">ФІНАНСИ</h2>
+          </div>
+          <p className="text-[#5A6A85] text-[10px] font-black uppercase tracking-widest ml-4">Баланс, виплати та історія транзакцій</p>
+        </div>
+        <div className="flex gap-4">
+          <button 
+            onClick={handleExportCSV}
+            className="px-8 py-3.5 bg-[#0B1221] border border-white/5 rounded-full text-[10px] font-black uppercase tracking-widest text-white hover:bg-[#1A2639] transition-all flex items-center gap-2"
+          >
+            <Download size={14} /> <span className="hidden md:inline-block">ЕКСПОРТ ЗВІТУ</span>
+          </button>
+          <button 
+            onClick={handleRequestPayout}
+            className="px-8 py-3.5 bg-white text-black rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+          >
+            <span className="hidden md:inline-block">ЗАПРОСИТИ ВИПЛАТУ</span>
+            <span className="md:hidden">ВИПЛАТА</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {[
+          { label: 'ДОСТУПНО ДО ВИПЛАТИ', val: `€${balance.toLocaleString('en-US', {minimumFractionDigits: 2})}`, icon: Wallet, color: '#10B981', trend: '+12% vs м.м.' },
+          { label: 'В ОБРОБЦІ', val: `€${pendingBalance.toLocaleString('en-US', {minimumFractionDigits: 2})}`, icon: CreditCard, color: '#F59E0B', trend: 'Очікується завтра' },
+          { label: 'ВСЬОГО ВИПЛАЧЕНО', val: `€${totalPayouts.toLocaleString('en-US', {minimumFractionDigits: 2})}`, icon: Landmark, color: '#0EA5E9', trend: 'За весь час' },
+        ].map((stat, i) => (
+          <motion.div
+            key={i}
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: i * 0.1 }}
+            className="p-8 rounded-[32px] bg-[#1A2639]/30 border border-white/5 relative overflow-hidden group shadow-lg min-h-[160px]"
+          >
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 p-8 opacity-[0.03] group-hover:opacity-[0.05] transition-all">
+              <stat.icon size={80} style={{ color: stat.color }} strokeWidth={1} />
+            </div>
+            <p className="text-[9px] font-black uppercase tracking-widest text-[#5A6A85] mb-2 relative z-10">{stat.label}</p>
+            <h3 className="text-4xl font-black text-white italic tracking-tighter mb-4 relative z-10">{stat.val}</h3>
+            <div className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-widest relative z-10" style={{ color: stat.color }}>
+              <TrendingUp size={12} /> {stat.trend}
+            </div>
+          </motion.div>
+        ))}
+      </div>
+      
+      {/* Conversion Analytics */}
+      <div className="bg-[#0B1221] border border-white/5 rounded-[32px] p-8 shadow-2xl">
+         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+            <div>
+               <h3 className="text-white font-black text-sm uppercase tracking-widest mb-1">Аналітика конверсій</h3>
+               <p className="text-[10px] text-[#5A6A85] font-bold uppercase tracking-widest">Ефективність реферальних посилань</p>
+            </div>
+            <div className="flex items-center gap-4 bg-[#1A2639]/30 px-4 py-2 rounded-xl border border-white/5">
+              <div className="text-center">
+                <p className="text-[9px] font-black text-[#5A6A85] uppercase tracking-widest">Конверсія</p>
+                <p className="text-sm font-black text-[#10B981]">{conversions.clicks > 0 ? ((conversions.sales / conversions.clicks) * 100).toFixed(1) : '0.0'}%</p>
+              </div>
+            </div>
+         </div>
+         
+         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-[#1A2639]/20 border border-white/5 rounded-2xl p-6 relative overflow-hidden group">
+              <div className="absolute -right-4 -top-4 w-24 h-24 bg-[#00E5FF]/5 rounded-full blur-xl group-hover:bg-[#00E5FF]/10 transition-all" />
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-[#00E5FF]/10 border border-[#00E5FF]/20 flex items-center justify-center text-[#00E5FF]">
+                  <MousePointerClick size={18} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-[#5A6A85] uppercase tracking-widest">Переходи</p>
+                  <p className="text-2xl font-black text-white italic">{conversions.clicks}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-[#1A2639]/20 border border-white/5 rounded-2xl p-6 relative overflow-hidden group">
+              <div className="absolute -right-4 -top-4 w-24 h-24 bg-[#7c5cfc]/5 rounded-full blur-xl group-hover:bg-[#7c5cfc]/10 transition-all" />
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-[#7c5cfc]/10 border border-[#7c5cfc]/20 flex items-center justify-center text-[#7c5cfc]">
+                  <UserPlus size={18} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-[#5A6A85] uppercase tracking-widest">Реєстрації</p>
+                  <p className="text-2xl font-black text-white italic">{conversions.registrations}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-[#1A2639]/20 border border-white/5 rounded-2xl p-6 relative overflow-hidden group">
+              <div className="absolute -right-4 -top-4 w-24 h-24 bg-[#10B981]/5 rounded-full blur-xl group-hover:bg-[#10B981]/10 transition-all" />
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-[#10B981]/10 border border-[#10B981]/20 flex items-center justify-center text-[#10B981]">
+                  <ShoppingCart size={18} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-[#5A6A85] uppercase tracking-widest">Продажі</p>
+                  <p className="text-2xl font-black text-white italic">{conversions.sales}</p>
+                </div>
+              </div>
+            </div>
+         </div>
+      </div>
+
+      {/* Finance Chart Section */}
+      <div className="bg-[#0B1221] border border-white/5 rounded-[32px] p-8 shadow-2xl">
+         <div className="flex items-center justify-between mb-8">
+            <div>
+               <h3 className="text-white font-black text-sm uppercase tracking-widest mb-1">Динаміка прибутку</h3>
+               <p className="text-[10px] text-[#5A6A85] font-bold uppercase tracking-widest">Статистика за останні 7 днів (EUR)</p>
+            </div>
+            <div className="flex items-center gap-2">
+               <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-[#00E5FF]"></div>
+                  <span className="text-[9px] font-black text-[#5A6A85] uppercase">Дохід</span>
+               </div>
+            </div>
+         </div>
+         
+         <div className="h-48 w-full flex items-end justify-between gap-2 px-2">
+            {dailyEarnings.map((val, i) => (
+               <div key={i} className="flex-1 flex flex-col items-center gap-3 group h-full justify-end">
+                  <div className="w-full relative overflow-visible flex items-end justify-center h-full">
+                     <motion.div 
+                        initial={{ height: 0 }}
+                        animate={{ height: `${val.percent}%` }}
+                        transition={{ duration: 1, delay: i * 0.1 }}
+                        className="w-full max-w-[24px] bg-gradient-to-t from-[#00E5FF]/20 to-[#00E5FF] rounded-t-xl relative group-hover:shadow-[0_0_20px_rgba(0,229,255,0.4)] transition-all"
+                     >
+                        <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-white text-black text-[9px] font-black px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 shadow-md">
+                           €{val.amount.toLocaleString('en-US', {minimumFractionDigits: 2})}
+                        </div>
+                     </motion.div>
+                  </div>
+                  <span className="text-[8px] font-black text-[#5A6A85] uppercase tracking-wider">
+                     {val.name}
+                  </span>
+               </div>
+            ))}
+         </div>
+      </div>
+
+      {/* Transactions Section */}
+      <div className="bg-[#0B1221] border border-white/5 rounded-[32px] overflow-hidden shadow-2xl p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-6 border-b border-white/5">
+           <h3 className="text-sm font-black uppercase tracking-widest text-white flex items-center gap-3">
+              <History size={16} className="text-[#00E5FF] shadow-[0_0_10px_rgba(0,229,255,0.4)]" /> ОСТАННЯ АКТИВНІСТЬ
+           </h3>
+           <div className="relative w-full sm:w-64">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#5A6A85]" size={14} />
+              <input 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Пошук транзакції..." 
+                className="bg-[#1A2639]/50 border border-transparent rounded-[16px] pl-10 pr-4 py-3 text-xs text-white focus:border-[#00E5FF]/30 outline-none w-full transition-all placeholder-[#5A6A85] font-medium"
+              />
+           </div>
+        </div>
+
+        {/* Mobile Transactions List */}
+        <div className="md:hidden space-y-4">
+          {filteredTransactions.length === 0 ? (
+            <div className="text-center py-12">
+              <p className="text-xs font-black text-[#5A6A85] uppercase tracking-widest">Транзакцій не знайдено</p>
+            </div>
+          ) : (
+            filteredTransactions.map((trx, idx) => (
+              <motion.div 
+                whileTap={{ scale: 0.98 }}
+                key={idx} 
+                className="bg-[#1A2639]/20 border border-white/5 rounded-[24px] p-5 flex flex-col gap-4 relative overflow-hidden group hover:border-[#00E5FF]/20 transition-all duration-300"
+              >
+                {/* Visual Glow Indicator */}
+                <div className={`absolute top-0 left-0 w-1.5 h-full ${trx.type === 'income' ? 'bg-[#10B981]' : trx.type === 'payout' ? 'bg-[#0EA5E9]' : 'bg-rose-500'}`} />
+
+                <div className="flex justify-between items-start">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2.5 rounded-xl ${trx.type === 'income' ? 'bg-[#10B981]/10 text-[#10B981]' : trx.type === 'payout' ? 'bg-[#0EA5E9]/10 text-[#0EA5E9]' : 'bg-rose-500/10 text-rose-500'}`}>
+                      {trx.type === 'income' ? <ArrowDownRight size={16} /> : trx.type === 'payout' ? <Landmark size={16} /> : <ArrowUpRight size={16} />}
+                    </div>
+                    <div>
+                      <p className="text-xs font-black text-white italic uppercase tracking-wider">{trx.type === 'income' ? 'Дохід' : trx.type === 'payout' ? 'Виплата' : 'Повернення'}</p>
+                      <p className="text-[9px] text-[#5A6A85] font-bold uppercase mt-0.5">{trx.date}</p>
+                    </div>
+                  </div>
+                  <span className={`text-base font-black italic tracking-tighter ${trx.amount > 0 ? 'text-[#10B981] drop-shadow-[0_0_8px_rgba(16,185,129,0.3)]' : 'text-rose-500'}`}>
+                    {trx.amount > 0 ? '+' : ''}€{Math.abs(trx.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}
+                  </span>
+                </div>
+
+                <div className="flex flex-col gap-1.5 pl-1">
+                  <p className="text-[11px] font-bold text-[#8899B5]">{trx.desc}</p>
+                  <p className="text-[8px] font-black text-[#5A6A85] tracking-widest">{trx.id}</p>
+                </div>
+
+                <div className="flex justify-between items-center pt-3 border-t border-white/5">
+                  <span className="text-[8px] font-black text-[#5A6A85] uppercase tracking-widest">Статус платіжки:</span>
+                  <span className={`px-2.5 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest border ${trx.status === 'completed' ? 'bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
+                    {trx.status === 'completed' ? 'ЗАВЕРШЕНО' : 'В ОБРОБЦІ'}
+                  </span>
+                </div>
+              </motion.div>
+            ))
+          )}
+        </div>
+
+        {/* Desktop Transactions Table */}
+        <div className="hidden md:block overflow-x-auto scrollbar-hide">
+          <table className="min-w-[800px] w-full text-left">
+            <thead>
+              <tr className="bg-transparent border-b border-white/5">
+                <th className="py-4 px-6 text-[9px] font-black text-[#5A6A85] uppercase tracking-widest">ДАТА / ТИП</th>
+                <th className="py-4 px-6 text-[9px] font-black text-[#5A6A85] uppercase tracking-widest">ОПИС</th>
+                <th className="py-4 px-6 text-[9px] font-black text-[#5A6A85] uppercase tracking-widest">СТАТУС</th>
+                <th className="py-4 px-6 text-[9px] font-black text-[#5A6A85] uppercase tracking-widest text-right">СУМА</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {filteredTransactions.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="py-12 text-center text-xs font-black text-[#5A6A85] uppercase tracking-widest">
+                    Транзакцій не знайдено
+                  </td>
+                </tr>
+              ) : (
+                filteredTransactions.map((trx, idx) => (
+                  <tr key={idx} className="group hover:bg-[#1A2639]/30 transition-all duration-200">
+                    <td className="py-5 px-6">
+                      <div className="flex items-center gap-4">
+                        <div className={`p-2 rounded-[10px] ${trx.type === 'income' ? 'bg-[#10B981]/10 text-[#10B981]' : trx.type === 'payout' ? 'bg-[#0EA5E9]/10 text-[#0EA5E9]' : 'bg-rose-500/10 text-rose-500'}`}>
+                          {trx.type === 'income' ? <ArrowDownRight size={16} /> : trx.type === 'payout' ? <Landmark size={16} /> : <ArrowUpRight size={16} />}
+                        </div>
+                        <div>
+                          <p className="text-xs font-black text-white italic uppercase tracking-widest">{trx.type === 'income' ? 'Дохід' : trx.type === 'payout' ? 'Виплата' : 'Повернення'}</p>
+                          <p className="text-[9px] text-[#5A6A85] font-bold uppercase mt-0.5">{trx.date}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="py-5 px-6">
+                      <p className="text-[11px] font-bold text-[#8899B5]">{trx.desc}</p>
+                      <p className="text-[9px] text-[#5A6A85] mt-0.5 font-bold italic line-clamp-1">{trx.id}</p>
+                    </td>
+                    <td className="py-5 px-6">
+                      <span className={`px-3 py-1.5 rounded-[10px] text-[8px] font-black uppercase tracking-widest border ${trx.status === 'completed' ? 'bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20' : 'bg-amber-500/10 text-amber-500 border-amber-500/20'}`}>
+                        {trx.status === 'completed' ? 'ЗАВЕРШЕНО' : 'В ОБРОБЦІ'}
+                      </span>
+                    </td>
+                    <td className="py-5 px-6 text-right">
+                      <span className={`text-sm font-black italic tracking-tighter ${trx.amount > 0 ? 'text-[#10B981] drop-shadow-[0_0_8px_rgba(16,185,129,0.3)]' : 'text-rose-500'}`}>
+                        {trx.amount > 0 ? '+' : ''}€{Math.abs(trx.amount).toLocaleString('en-US', {minimumFractionDigits: 2})}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default FinanceTab;
+

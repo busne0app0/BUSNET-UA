@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Build and production output
+dist/
+dist_production/
+build/
+.next/
+.turbo/
+.vercel/
+
+# Temporary and local files
+supabase/.temp/
+scratch/
+*.zip
+*.log
+admin KEY/
+
+# IDE and local AI configs
+.gemini/
+.agents/
+
+# One-off scripts and test files
+check_schema*.cjs
+fix*.cjs
+run_migration.cjs
+index.mjs
+tsc_errors.txt
+SUPABASE_FIXES.sql
+ai-image-demo/
+ai-text-demo/

@@ -1,0 +1,233 @@
+.busnet-hero {
+  --busnet-hero-bg: #030712;
+  position: relative;
+  isolation: isolate;
+  background: var(--busnet-hero-bg);
+  /* Full viewport so content + form always fit above the fold */
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  /* NO overflow: hidden here — it would clip city autocomplete & calendar dropdowns.
+     The photo is clipped inside .busnet-hero__media which has its own overflow: hidden. */
+  overflow: visible;
+}
+
+/* ─────────────── Media stage ───────────────
+ * .busnet-hero__media is a size container. The stage inside it behaves like
+ * `object-fit: cover` with a focal point, but holds BOTH the photo and the
+ * route svg, so they are always cropped and moved identically.
+ * Uses container query units for locked aspect ratios.
+ */
+.busnet-hero__media {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  container-type: size;
+}
+
+.busnet-hero__stage {
+  --r: 2;       /* stage aspect ratio: desktop image is 2:1 */
+  --fx: 64%;    /* focal point inside the photo */
+  --fy: 56%;
+  position: absolute;
+  left: var(--fx);
+  top: var(--fy);
+  width: max(100cqw, calc(var(--r) * 100cqh));
+  aspect-ratio: var(--r) / 1;
+  transform: translate(calc(var(--fx) * -1), calc(var(--fy) * -1));
+  /* Deep dimming: photo becomes cinematic backdrop, text wins */
+  opacity: 0.38;
+}
+
+.busnet-hero__drift {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 50%;
+}
+
+.busnet-hero__picture {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.busnet-hero__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+}
+
+.busnet-hero__routes {
+  position: absolute;
+  inset: 0;
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+/* ───────────── Overlays ───────────── */
+.busnet-hero__shade,
+.busnet-hero__glow,
+.busnet-hero__bottom-fade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Horizontal shade: strong protection over centred text block */
+.busnet-hero__shade--horizontal {
+  background: linear-gradient(
+    90deg,
+    rgba(3, 7, 18, 0.80) 0%,
+    rgba(3, 7, 18, 0.65) 25%,
+    rgba(3, 7, 18, 0.38) 55%,
+    rgba(3, 7, 18, 0.08) 100%
+  );
+}
+
+/* Vertical shade: top vignette + strong bottom integration */
+.busnet-hero__shade--vertical {
+  background: linear-gradient(
+    180deg,
+    rgba(3, 7, 18, 0.40) 0%,
+    rgba(3, 7, 18, 0.05) 42%,
+    rgba(3, 7, 18, 0.72) 100%
+  );
+}
+
+.busnet-hero__glow {
+  background: radial-gradient(
+    ellipse at 77% 48%,
+    rgba(0, 212, 255, 0.12) 0%,
+    rgba(139, 92, 246, 0.05) 30%,
+    transparent 55%
+  );
+}
+
+/* Seamless fade to #030712 — taller for full-viewport hero */
+.busnet-hero__bottom-fade {
+  inset: auto 0 0;
+  height: 10rem;
+  background: linear-gradient(
+    180deg,
+    rgba(3, 7, 18, 0) 0%,
+    rgba(3, 7, 18, 0.55) 50%,
+    var(--busnet-hero-bg) 100%
+  );
+}
+
+.busnet-hero__content {
+  position: relative;
+  z-index: 2;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  /* Header is ~80px; give text breathing room */
+  padding: 5.5rem 1.25rem 1rem;
+}
+
+/* ─── Suggestions: horizontal scroll strip, always centred ─── */
+.busnet-hero__suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-bottom: 0.25rem;
+  max-width: 820px;
+  width: 100%;
+  justify-content: center;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Mobile: allow scroll if items overflow, still prefer center */
+@media (max-width: 640px) {
+  .busnet-hero__suggestions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    justify-content: safe center;
+  }
+  .busnet-hero__suggestions::-webkit-scrollbar { display: none; }
+}
+
+/* ─── SearchWidget wrapper anchored at bottom of hero ─── */
+.busnet-hero__search-wrap {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  padding: 0 1.25rem 2rem;
+}
+
+/* ───────────── Motion: desktop with fine pointer only ───────────── */
+@media (min-width: 768px) and (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .busnet-hero__drift {
+    will-change: transform;
+    animation: busnet-hero-slow-drift 40s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes busnet-hero-slow-drift {
+  from { transform: scale(1.002); }
+  to { transform: scale(1.03); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .busnet-hero__drift {
+    animation: none !important;
+    will-change: auto;
+  }
+}
+
+/* ─── Mobile: portrait crop, deep dim for readability ─── */
+@media (max-width: 767px) {
+  .busnet-hero__stage {
+    --r: 0.75;  /* portrait 3:4 */
+    --fx: 50%;
+    --fy: 45%;
+    /* Even deeper dim so text pops on mobile */
+    opacity: 0.22;
+  }
+
+  .busnet-hero__routes {
+    display: none;
+  }
+
+  .busnet-hero__shade--horizontal {
+    background: linear-gradient(
+      180deg,
+      rgba(3, 7, 18, 0.55) 0%,
+      rgba(3, 7, 18, 0.30) 55%,
+      rgba(3, 7, 18, 0.12) 100%
+    );
+  }
+
+  .busnet-hero__shade--vertical {
+    background: linear-gradient(
+      180deg,
+      rgba(3, 7, 18, 0.60) 0%,
+      rgba(3, 7, 18, 0.28) 38%,
+      rgba(3, 7, 18, 0.82) 100%
+    );
+  }
+
+  .busnet-hero__content {
+    padding: 4.5rem 0.875rem 0.5rem;
+    justify-content: flex-start;
+  }
+
+  /* Suggestions centering on mobile — handled above in responsive block */
+
+  .busnet-hero__search-wrap {
+    padding: 0 0.75rem 1.5rem;
+  }
+}

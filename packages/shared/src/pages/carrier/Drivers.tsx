@@ -1,0 +1,431 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+import React, { useEffect, useState, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  UserCircle2, Star, Plus, X,
+  Phone, Mail, Calendar, 
+  MapPin, ShieldCheck, ChevronRight,
+  UserCheck2, Clock, MoreVertical, Loader2, Search, Trash2, AlertCircle
+} from 'lucide-react';
+import { useDrivers, Driver } from '@busnet/shared/hooks/useDrivers';
+import { useAuthStore } from '@busnet/shared/store/useAuthStore';
+import { toast } from 'react-hot-toast';
+
+const getExperience = (driver: any) => {
+  // Використовуємо tripsCount з бази, якщо є — інакше показуємо НОВИЙ з 0 рейсів
+  const trips = typeof (driver as any).tripsCount === 'number' ? (driver as any).tripsCount : 0;
+  
+  if (trips === 0) return { label: 'НОВИЙ', sub: '0 РЕЙСІВ', badge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' };
+  if (trips < 15) return { label: 'МОЛОДШИЙ', sub: `${trips} РЕЙСІВ`, badge: 'bg-blue-500/10 text-blue-400 border-blue-500/20' };
+  if (trips < 50) return { label: 'ДОСВІДЧЕНИЙ', sub: `${trips} РЕЙСІВ`, badge: 'bg-violet-500/10 text-violet-400 border-violet-500/20' };
+  return { label: 'ПРОФЕСІОНАЛ', sub: `${trips} РЕЙСІВ`, badge: 'bg-amber-500/10 text-amber-400 border-amber-500/20' };
+};
+
+// Скелетон-картка водія для стану завантаження
+const DriverSkeletonCard = () => (
+  <div className="bg-[#1A2639]/20 border border-white/5 rounded-[24px] p-5 flex flex-col gap-4 animate-pulse">
+    <div className="flex justify-between items-start gap-4">
+      <div className="flex items-center gap-3">
+        <div className="w-12 h-12 rounded-full bg-white/5" />
+        <div className="space-y-2">
+          <div className="h-3 w-28 bg-white/5 rounded-full" />
+          <div className="h-2 w-20 bg-white/5 rounded-full" />
+        </div>
+      </div>
+      <div className="h-6 w-12 bg-white/5 rounded-full" />
+    </div>
+    <div className="h-14 bg-white/5 rounded-xl" />
+    <div className="flex justify-between items-center pt-3 border-t border-white/5">
+      <div className="h-6 w-24 bg-white/5 rounded-full" />
+      <div className="flex gap-2">
+        <div className="w-10 h-10 bg-white/5 rounded-xl" />
+        <div className="w-10 h-10 bg-white/5 rounded-xl" />
+        <div className="w-10 h-10 bg-white/5 rounded-xl" />
+      </div>
+    </div>
+  </div>
+);
+
+// Скелетон рядок таблиці
+const DriverSkeletonRow = () => (
+  <tr className="animate-pulse">
+    <td className="px-6 py-4 rounded-l-[16px]">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-full bg-white/5" />
+        <div className="space-y-2">
+          <div className="h-3 w-28 bg-white/5 rounded-full" />
+          <div className="h-2 w-20 bg-white/5 rounded-full" />
+        </div>
+      </div>
+    </td>
+    <td className="px-6 py-4"><div className="h-3 w-20 bg-white/5 rounded-full" /></td>
+    <td className="px-6 py-4"><div className="h-3 w-24 bg-white/5 rounded-full" /></td>
+    <td className="px-6 py-4"><div className="h-6 w-12 bg-white/5 rounded-full" /></td>
+    <td className="px-6 py-4"><div className="h-6 w-20 bg-white/5 rounded-full" /></td>
+    <td className="px-6 py-4 rounded-r-[16px]"><div className="h-8 w-24 bg-white/5 rounded-full ml-auto" /></td>
+  </tr>
+);
+
+
+export default function Drivers() {
+  const { user } = useAuthStore();
+  const { drivers, loading, fetchDrivers, addDriver, updateDriver, deleteDriver } = useDrivers();
+  
+  const [isAddingModalOpen, setIsAddingModalOpen] = useState(false);
+  const [isAdding, setIsAdding] = useState(false);
+  const [driverToDelete, setDriverToDelete] = useState<{id: string, name: string} | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  
+  const [formData, setFormData] = useState({
+    firstName: '',
+    lastName: '',
+    phone: '',
+    licenseNumber: ''
+  });
+
+  // Мемоизированний запрос даних
+  const loadDrivers = useCallback(() => {
+    if (user?.uid) fetchDrivers(user.uid);
+  }, [user?.uid, fetchDrivers]);
+
+  useEffect(() => {
+    loadDrivers();
+  }, [loadDrivers]);
+
+  const handleAddDriver = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setIsAdding(true);
+    const toastId = toast.loading('Додавання водія...');
+    try {
+      await addDriver({
+        carrierId: user.uid,
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        phone: formData.phone,
+        licenseNumber: formData.licenseNumber,
+        rating: 5.0,
+        status: 'active'
+      });
+      toast.success('Водія успішно додано!', { id: toastId });
+      setIsAddingModalOpen(false);
+      setFormData({ firstName: '', lastName: '', phone: '', licenseNumber: '' });
+    } catch (error) {
+      toast.error('Помилка при додаванні', { id: toastId });
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const confirmDeleteDriver = async () => {
+    if (!user || !driverToDelete) return;
+    setIsDeleting(true);
+    const toastId = toast.loading('Видалення...');
+    try {
+      await deleteDriver(driverToDelete.id, user.uid);
+      toast.success('Водія видалено з системи', { id: toastId });
+      setDriverToDelete(null);
+    } catch (error) {
+      toast.error('Помилка при видаленні', { id: toastId });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleToggleStatus = async (driver: Driver) => {
+    if (!user) return;
+    // Циклическое переключение: active -> resting -> inactive -> active
+    const statusCycle: Driver['status'][] = ['active', 'resting', 'inactive'];
+    const currentIdx = statusCycle.indexOf(driver.status as any);
+    const newStatus = statusCycle[(currentIdx + 1) % statusCycle.length];
+    
+    const toastId = toast.loading('Зміна статусу...');
+    try {
+      await updateDriver(driver.id, user.uid, { status: newStatus });
+      toast.success(`Статус змінено на: ${newStatus === 'active' ? 'В роботі' : newStatus === 'resting' ? 'Відпочинок' : 'Неактивний'}`, { id: toastId });
+    } catch (error) {
+      toast.error('Помилка оновлення статусу', { id: toastId });
+    }
+  };
+
+  const activeCount = drivers.filter(d => d.status === 'active' || d.status === 'on_trip').length;
+  const avgRating = drivers.length > 0 
+    ? (drivers.reduce((acc, d) => acc + (d.rating || 0), 0) / drivers.length).toFixed(1)
+    : '5.0';
+    
+  return (
+    <div className="space-y-8 pb-12 relative">
+      {/* HEADER */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+        <div>
+          <div className="w-12 h-1 bg-[#0EA5E9] mb-4 shadow-[0_0_10px_rgba(14,165,233,0.5)] rounded-full" />
+          <h2 className="text-3xl font-black uppercase tracking-widest text-white">ВОДІЇ</h2>
+          <p className="text-[#5A6A85] text-[10px] font-black uppercase tracking-widest mt-2">Управління командою професіоналів</p>
+        </div>
+        <button 
+          onClick={() => setIsAddingModalOpen(true)}
+          className="px-6 py-3 bg-white text-black rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-[#0EA5E9] hover:text-white hover:shadow-[0_0_20px_rgba(14,165,233,0.4)] transition-all flex items-center justify-center gap-2"
+        >
+          <Plus size={16} strokeWidth={2.5} /> 
+          ДОДАТИ ВОДІЯ
+        </button>
+      </div>
+
+      {/* DELETE MODAL */}
+      <AnimatePresence>
+        {driverToDelete && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !isDeleting && setDriverToDelete(null)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="bg-[#1A2639] border border-white/10 p-8 rounded-[32px] max-w-sm w-full relative z-10 text-center">
+              <div className="w-16 h-16 bg-rose-500/10 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertCircle size={32} />
+              </div>
+              <h3 className="text-white font-black uppercase tracking-widest mb-2">Видалити водія?</h3>
+              <p className="text-[#5A6A85] text-xs mb-8">Ви впевнені, що хочете видалити {driverToDelete.name}? Дані про поїздки можуть бути втрачені.</p>
+              <div className="flex gap-3">
+                <button disabled={isDeleting} onClick={() => setDriverToDelete(null)} className="flex-1 py-3 rounded-xl bg-white/5 text-white text-[10px] font-black uppercase tracking-widest">Скасувати</button>
+                <button disabled={isDeleting} onClick={confirmDeleteDriver} className="flex-1 py-3 rounded-xl bg-rose-500 text-white text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2">
+                  {isDeleting ? <Loader2 size={14} className="animate-spin" /> : 'ВИДАЛИТИ'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ADD MODAL */}
+      <AnimatePresence>
+        {isAddingModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsAddingModalOpen(false)} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="w-full max-w-lg bg-[#0B1221] border border-[#0EA5E9]/20 rounded-[32px] p-8 relative z-10 shadow-[0_0_30px_rgba(14,165,233,0.1)]">
+              <button onClick={() => setIsAddingModalOpen(false)} className="absolute top-6 right-6 text-[#5a6a85] hover:text-white transition-colors"><X size={24} /></button>
+              <h3 className="text-xl font-black uppercase tracking-widest text-white mb-6">НОВИЙ ВОДІЙ</h3>
+              <form onSubmit={handleAddDriver} className="space-y-5">
+                 <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                       <label className="text-[10px] text-[#5a6a85] font-black uppercase tracking-widest">Ім'я</label>
+                       <input required value={formData.firstName} onChange={e => setFormData({...formData, firstName: e.target.value})} className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#0EA5E9] outline-none transition-colors" placeholder="Олександр" />
+                    </div>
+                    <div className="space-y-2">
+                       <label className="text-[10px] text-[#5a6a85] font-black uppercase tracking-widest">Прізвище</label>
+                       <input required value={formData.lastName} onChange={e => setFormData({...formData, lastName: e.target.value})} className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#0EA5E9] outline-none transition-colors" placeholder="Коваль" />
+                    </div>
+                 </div>
+                 <div className="space-y-2">
+                    <label className="text-[10px] text-[#5a6a85] font-black uppercase tracking-widest">Номер телефону</label>
+                    <input required type="tel" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#0EA5E9] outline-none transition-colors" placeholder="+380 50 123 45 67" />
+                 </div>
+                 <div className="space-y-2">
+                    <label className="text-[10px] text-[#5a6a85] font-black uppercase tracking-widest">Номер посвідчення</label>
+                    <input required value={formData.licenseNumber} onChange={e => setFormData({...formData, licenseNumber: e.target.value})} className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-[#0EA5E9] outline-none transition-colors uppercase" placeholder="ДЕ №123456" />
+                 </div>
+                 <button disabled={isAdding} type="submit" className="w-full mt-6 py-4 bg-[#0EA5E9] text-white rounded-full text-[11px] font-black uppercase tracking-widest flex justify-center items-center gap-2 hover:shadow-[0_0_20px_rgba(14,165,233,0.4)] transition-all disabled:opacity-50">
+                    {isAdding ? <Loader2 size={16} className="animate-spin" /> : 'ЗБЕРЕГТИ ВОДІЯ'}
+                 </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* STATS */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {[
+          { label: 'ВСЬОГО ВОДІЇВ', val: drivers.length.toString(), icon: UserCircle2, color: 'text-[#0EA5E9]' },
+          { label: 'НА ЗМІНІ', val: activeCount.toString(), icon: UserCheck2, color: 'text-[#10B981]' },
+          { label: 'СЕРЕДНІЙ РЕЙТИНГ', val: avgRating, icon: Star, color: 'text-[#FBBF24]' },
+          { label: 'ПЕРЕВІРЕНО', val: '100%', icon: ShieldCheck, color: 'text-[#E879F9]' },
+        ].map((stat, i) => (
+          <div key={i} className="bg-[#1A2639]/30 border border-white/5 rounded-[32px] p-6 relative overflow-hidden h-[120px] flex flex-col justify-between group hover:bg-[#1A2639]/50 transition-colors">
+             <p className="text-[9px] font-black text-[#5a6a85] uppercase tracking-widest">{stat.label}</p>
+             <h3 className="font-black text-3xl text-white tracking-widest">{stat.val}</h3>
+             <stat.icon size={64} className={`absolute -right-4 -bottom-4 opacity-[0.03] ${stat.color} group-hover:scale-110 transition-transform duration-500`} />
+          </div>
+        ))}
+      </div>
+
+      {/* MOBILE CARDS VIEW */}
+      <div className="md:hidden space-y-4">
+        {loading ? (
+          [1,2,3].map(i => <DriverSkeletonCard key={i} />)
+        ) : drivers.length === 0 ? (
+          <div className="py-20 text-center">
+            <Search size={48} className="text-[#5a6a85] mx-auto mb-4 opacity-20" />
+            <p className="text-[#5a6a85] text-xs font-black uppercase tracking-widest">Водіїв не знайдено</p>
+          </div>
+        ) : (
+          drivers.map((driver) => {
+            const exp = getExperience(driver);
+            return (
+              <motion.div 
+                key={driver.id} 
+                whileTap={{ scale: 0.98 }}
+                className="bg-[#1A2639]/20 border border-white/5 rounded-[24px] p-5 flex flex-col gap-4 relative overflow-hidden group hover:border-[#0EA5E9]/20 transition-all duration-300"
+              >
+                {/* Visual Status Indicator strip */}
+                <div className={`absolute top-0 left-0 w-1.5 h-full ${
+                  driver.status === 'active' ? 'bg-[#10B981]' :
+                  driver.status === 'resting' ? 'bg-amber-500' :
+                  'bg-rose-500'
+                }`} />
+
+                <div className="flex justify-between items-start gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-[#0EA5E9]/10 border border-[#0EA5E9]/20 flex items-center justify-center text-[#0EA5E9] font-black text-sm uppercase">
+                      {driver.firstName.charAt(0)}
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-black text-white tracking-wider uppercase">{driver.firstName} {driver.lastName}</h4>
+                      <p className="text-[10px] text-[#5a6a85] font-semibold mt-0.5">{driver.phone}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#FBBF24]/10 border border-[#FBBF24]/20 w-fit">
+                    <Star size={10} className="text-[#FBBF24] fill-[#FBBF24]" />
+                    <span className="text-[9px] font-black text-[#FBBF24]">{driver.rating || '5.0'}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 bg-black/10 p-3.5 rounded-xl border border-white/5 text-[10px] font-black uppercase tracking-wider">
+                  <div>
+                    <p className="text-[#5a6a85] text-[8px] mb-1">Посвідчення</p>
+                    <p className="text-[#8899b5]">{driver.licenseNumber}</p>
+                  </div>
+                  <div>
+                    <p className="text-[#5a6a85] text-[8px] mb-1">Рейси / Досвід</p>
+                    <span className={`px-2 py-0.5 rounded border text-[8px] font-black uppercase tracking-widest ${exp.badge}`}>
+                      {exp.label} ({exp.sub.split(' ')[0]})
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center pt-3 border-t border-white/5">
+                  <span className={`px-3 py-1.5 rounded-full border text-[8px] font-black uppercase tracking-widest ${
+                    driver.status === 'active' ? 'bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20' :
+                    driver.status === 'resting' ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' :
+                    'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                  }`}>
+                    {driver.status === 'active' ? '● В РОБОТІ' : driver.status === 'resting' ? 'ВІДПОЧИНОК' : 'НЕАКТИВНИЙ'}
+                  </span>
+
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => handleToggleStatus(driver)} 
+                      className="p-3 rounded-xl bg-white/5 border border-white/5 text-[#8899b5] hover:text-[#0EA5E9] hover:bg-[#0EA5E9]/10 transition-all flex items-center justify-center min-w-[40px] min-h-[40px]" 
+                      title="Змінити статус"
+                    >
+                      <UserCheck2 size={16} />
+                    </button>
+                    <a 
+                      href={`tel:${driver.phone}`} 
+                      className="p-3 rounded-xl bg-white/5 border border-white/5 text-[#8899b5] hover:text-white hover:bg-white/10 transition-all flex items-center justify-center min-w-[40px] min-h-[40px]"
+                    >
+                      <Phone size={16} />
+                    </a>
+                    <button 
+                      onClick={() => setDriverToDelete({id: driver.id, name: `${driver.firstName} ${driver.lastName}`})} 
+                      className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center min-w-[40px] min-h-[40px]" 
+                      title="Видалити"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })
+        )}
+      </div>
+
+      {/* DESKTOP TABLE VIEW */}
+      <div className="hidden md:block overflow-x-auto scrollbar-hide">
+        <table className="min-w-[900px] w-full text-left border-separate border-spacing-y-2">
+          <thead>
+            <tr className="bg-[#1A2639]/30">
+              <th className="px-6 py-4 text-[9px] font-black text-[#5a6a85] uppercase tracking-widest rounded-l-full">ВОДІЙ</th>
+              <th className="px-6 py-4 text-[9px] font-black text-[#5a6a85] uppercase tracking-widest">ПОСВІДЧЕННЯ</th>
+              <th className="px-6 py-4 text-[9px] font-black text-[#5a6a85] uppercase tracking-widest">ДОСВІД</th>
+              <th className="px-6 py-4 text-[9px] font-black text-[#5a6a85] uppercase tracking-widest">РЕЙТИНГ</th>
+              <th className="px-6 py-4 text-[9px] font-black text-[#5a6a85] uppercase tracking-widest">СТАТУС</th>
+              <th className="px-6 py-4 text-[9px] font-black text-[#5a6a85] uppercase tracking-widest text-right rounded-r-full">ДІЇ</th>
+            </tr>
+          </thead>
+          <tbody>
+              {loading ? (
+                [1,2,3].map(i => <DriverSkeletonRow key={i} />)
+              ) : drivers.length === 0 ? (
+                <tr>
+                   <td colSpan={6} className="py-20 text-center">
+                      <Search size={48} className="text-[#5a6a85] mx-auto mb-4 opacity-20" />
+                      <p className="text-[#5a6a85] text-xs font-black uppercase tracking-widest">Водіїв не знайдено</p>
+                   </td>
+                </tr>
+              ) : drivers.map((driver, idx) => {
+                const exp = getExperience(driver);
+                return (
+                  <motion.tr 
+                    key={driver.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: idx * 0.05 }}
+                    className="bg-[#1A2639]/30 hover:bg-[#1A2639]/50 transition-colors group"
+                  >
+                    <td className="px-6 py-4 rounded-l-[16px]">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-[#0EA5E9]/10 flex items-center justify-center text-[#0EA5E9] font-black border border-[#0EA5E9]/20">
+                          {driver.firstName.charAt(0)}
+                        </div>
+                        <div>
+                          <h4 className="text-[12px] font-bold text-white tracking-widest uppercase">{driver.firstName} {driver.lastName}</h4>
+                          <p className="text-[10px] text-[#5a6a85] font-medium">{driver.phone}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-[11px] text-[#8899b5] font-bold uppercase tracking-widest">{driver.licenseNumber}</td>
+                    <td className="px-6 py-4">
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-black text-white uppercase tracking-widest">{exp.label}</p>
+                        <p className="text-[8px] font-black text-[#5a6a85] uppercase tracking-widest">{exp.sub}</p>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#FBBF24]/10 border border-[#FBBF24]/20 w-fit">
+                         <Star size={12} className="text-[#FBBF24] fill-[#FBBF24]" />
+                         <span className="text-[10px] font-black text-[#FBBF24]">{driver.rating || '5.0'}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={`px-3 py-1.5 rounded-full border text-[9px] font-black uppercase tracking-widest whitespace-nowrap ${
+                        driver.status === 'active' ? 'bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20' :
+                        driver.status === 'resting' ? 'bg-amber-500/10 text-amber-500 border-amber-500/20' :
+                        'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                      }`}>
+                        {driver.status === 'active' ? '● В РОБОТІ' : driver.status === 'resting' ? 'ВІДПОЧИНОК' : 'НЕАКТИВНИЙ'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right rounded-r-[16px]">
+                      <div className="flex items-center justify-end gap-2 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                         <button onClick={() => handleToggleStatus(driver)} className="p-2.5 rounded-full bg-white/[0.03] border border-white/5 text-[#8899b5] hover:text-[#0EA5E9] hover:bg-[#0EA5E9]/10 transition-all" title="Змінити статус">
+                            <UserCheck2 size={14} />
+                         </button>
+                         <a href={`tel:${driver.phone}`} className="p-2.5 rounded-full bg-white/[0.03] border border-white/5 text-[#8899b5] hover:text-white hover:bg-white/10 transition-all">
+                            <Phone size={14} />
+                         </a>
+                         <button onClick={() => setDriverToDelete({id: driver.id, name: `${driver.firstName} ${driver.lastName}`})} className="p-2.5 rounded-full bg-rose-500/5 border border-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all" title="Видалити">
+                            <Trash2 size={14} />
+                         </button>
+                      </div>
+                    </td>
+                  </motion.tr>
+                );
+              })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
